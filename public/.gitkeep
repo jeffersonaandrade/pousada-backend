@@ -1,0 +1,3 @@
+# Esta pasta conterá os arquivos estáticos do frontend React
+# Após o build do frontend, copie os arquivos de web-admin/dist para aqui
+

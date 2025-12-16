@@ -1,0 +1,9 @@
+-- CreateTable
+CREATE TABLE "Pagamento" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "hospedeId" INTEGER NOT NULL,
+    "valor" REAL NOT NULL,
+    "metodo" TEXT NOT NULL,
+    "data" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Pagamento_hospedeId_fkey" FOREIGN KEY ("hospedeId") REFERENCES "Hospede" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);

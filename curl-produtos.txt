@@ -1,0 +1,79 @@
+# Comandos CURL para criar produtos
+# Copie e cole cada comando no terminal
+# Use localhost se estiver na mesma máquina, ou 192.168.0.38 se estiver em outra máquina na rede
+
+# ============================================
+# OPÇÃO 1: LOCALHOST (mesma máquina)
+# ============================================
+
+# 1. Hambúrguer Artesanal
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Hambúrguer Artesanal\",\"preco\":25.90,\"estoque\":50,\"categoria\":\"Lanches\"}"
+
+# 2. Batata Frita
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Batata Frita\",\"preco\":12.50,\"estoque\":100,\"categoria\":\"Acompanhamentos\"}"
+
+# 3. Refrigerante Lata
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Refrigerante Lata\",\"preco\":5.00,\"estoque\":200,\"categoria\":\"Bebidas\"}"
+
+# 4. Água Mineral
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Água Mineral\",\"preco\":3.50,\"estoque\":150,\"categoria\":\"Bebidas\"}"
+
+# 5. Cerveja Long Neck
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Cerveja Long Neck\",\"preco\":8.00,\"estoque\":100,\"categoria\":\"Bebidas\"}"
+
+# 6. Pizza Média
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Pizza Média\",\"preco\":35.00,\"estoque\":30,\"categoria\":\"Lanches\"}"
+
+# 7. Salada Caesar
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Salada Caesar\",\"preco\":18.00,\"estoque\":40,\"categoria\":\"Saladas\"}"
+
+# 8. Suco Natural
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Suco Natural\",\"preco\":7.50,\"estoque\":80,\"categoria\":\"Bebidas\"}"
+
+# 9. Açaí
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Açaí\",\"preco\":15.00,\"estoque\":60,\"categoria\":\"Sobremesas\"}"
+
+# 10. Sorvete
+curl -X POST http://localhost:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Sorvete\",\"preco\":10.00,\"estoque\":70,\"categoria\":\"Sobremesas\"}"
+
+# ============================================
+# OPÇÃO 2: IP DA REDE (192.168.0.38)
+# ============================================
+
+# 1. Hambúrguer Artesanal
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Hambúrguer Artesanal\",\"preco\":25.90,\"estoque\":50,\"categoria\":\"Lanches\"}"
+
+# 2. Batata Frita
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Batata Frita\",\"preco\":12.50,\"estoque\":100,\"categoria\":\"Acompanhamentos\"}"
+
+# 3. Refrigerante Lata
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Refrigerante Lata\",\"preco\":5.00,\"estoque\":200,\"categoria\":\"Bebidas\"}"
+
+# 4. Água Mineral
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Água Mineral\",\"preco\":3.50,\"estoque\":150,\"categoria\":\"Bebidas\"}"
+
+# 5. Cerveja Long Neck
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Cerveja Long Neck\",\"preco\":8.00,\"estoque\":100,\"categoria\":\"Bebidas\"}"
+
+# 6. Pizza Média
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Pizza Média\",\"preco\":35.00,\"estoque\":30,\"categoria\":\"Lanches\"}"
+
+# 7. Salada Caesar
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Salada Caesar\",\"preco\":18.00,\"estoque\":40,\"categoria\":\"Saladas\"}"
+
+# 8. Suco Natural
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Suco Natural\",\"preco\":7.50,\"estoque\":80,\"categoria\":\"Bebidas\"}"
+
+# 9. Açaí
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Açaí\",\"preco\":15.00,\"estoque\":60,\"categoria\":\"Sobremesas\"}"
+
+# 10. Sorvete
+curl -X POST http://192.168.0.38:3000/api/produtos -H "Content-Type: application/json" -d "{\"nome\":\"Sorvete\",\"preco\":10.00,\"estoque\":70,\"categoria\":\"Sobremesas\"}"
+
+# ============================================
+# VERIFICAR PRODUTOS CRIADOS
+# ============================================
+curl http://localhost:3000/api/produtos
+# ou
+curl http://192.168.0.38:3000/api/produtos
+

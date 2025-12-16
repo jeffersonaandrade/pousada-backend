@@ -1,0 +1,172 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// SQLite não suporta enums nativamente, usando String com valores específicos
+// Os tipos TypeScript são mantidos através do Prisma Client gerado
+
+model Usuario {
+  id       Int     @id @default(autoincrement())
+  nome     String
+  pin      String  @unique // PIN de 4 dígitos para garçom
+  cargo    String  @default("WAITER") // WAITER, MANAGER, ADMIN
+  ativo    Boolean @default(true)
+  pedidosAutorizados Pedido[] @relation("PedidosAutorizados") // Pedidos manuais autorizados por este gerente
+  pedidosCriados Pedido[] @relation("PedidosCriados") // Pedidos criados por este garçom
+  perdasEstoque PerdaEstoque[] // Baixas técnicas registradas
+  caixas   Caixa[] // Caixas abertos/fechados por este usuário
+}
+
+model Quarto {
+  id         Int      @id @default(autoincrement())
+  numero     String   @unique // Número do quarto (ex: "101", "201")
+  andar      Int      // Andar do quarto (1, 2, 3, etc.)
+  categoria  String   // Categoria do quarto (ex: "Standard", "Luxo", "Suite")
+  status     String   @default("LIVRE") // LIVRE, OCUPADO, LIMPEZA, MANUTENCAO
+  hospedes   Hospede[] // Histórico de hóspedes que ocuparam este quarto
+}
+
+model Hospede {
+  id           Int      @id @default(autoincrement())
+  tipo         String   @default("HOSPEDE") // HOSPEDE, DAY_USE, VIP
+  nome         String
+  documento    String?  // Obrigatório para Day Use
+  telefone     String?  // Telefone para contato
+  email        String?  // Email para marketing/integração futura
+  quarto       String?  // DEPRECATED: Mantido para compatibilidade, usar quartoId
+  quartoId     Int?     // ID do quarto (obrigatório para HOSPEDE)
+  uidPulseira  String?  @unique // ID do chip NFC (nullable para permitir liberação)
+  limiteGasto  Float?   // Trava de segurança para Day Use
+  dividaAtual  Float    @default(0.0)
+  ativo        Boolean  @default(true)
+  origem       String   @default("BALCAO") // BALCAO, SITE (para diferenciar origem no futuro)
+  dataCheckout DateTime? // Data/hora do checkout (quando hóspede saiu)
+  pedidos      Pedido[]
+  pagamentos   Pagamento[] // Histórico de pagamentos
+  quartoRel    Quarto?  @relation(fields: [quartoId], references: [id])
+}
+
+model Produto {
+  id             Int      @id @default(autoincrement())
+  nome           String
+  preco          Float
+  estoque        Int      @default(0)
+  foto           String?
+  categoria      String?
+  descricao      String?
+  setor          String   @default("COZINHA") // COZINHA, BAR_PISCINA, BOATE
+  visivelCardapio Boolean  @default(true) // Se false, não aparece no cardápio do garçom/tablet
+  pedidos        Pedido[]
+  perdas         PerdaEstoque[]
+}
+
+model Pedido {
+  id                Int       @id @default(autoincrement())
+  hospedeId         Int
+  produtoId         Int
+  status            String    @default("PENDENTE") // PENDENTE, PREPARANDO, PRONTO, ENTREGUE, CANCELADO
+  valor             Float     // Valor congelado no momento da venda
+  data              DateTime  @default(now()) // Data/hora do pedido (horário brasileiro)
+  dataInicioPreparo DateTime? // Timestamp quando mudou para PREPARANDO
+  dataPronto        DateTime? // Timestamp quando mudou para PRONTO
+  metodoCriacao     String    @default("NFC") // NFC (automático) ou MANUAL (com PIN de gerente)
+  gerenteId         Int?      // ID do gerente que autorizou (se métodoCriacao = MANUAL)
+  usuarioId         Int?      // ID do garçom que criou o pedido (opcional para pedidos antigos)
+  
+  hospede   Hospede @relation(fields: [hospedeId], references: [id])
+  produto   Produto @relation(fields: [produtoId], references: [id])
+  gerente   Usuario? @relation("PedidosAutorizados", fields: [gerenteId], references: [id])
+  usuario   Usuario? @relation("PedidosCriados", fields: [usuarioId], references: [id])
+}
+
+model PerdaEstoque {
+  id         Int      @id @default(autoincrement())
+  produtoId  Int
+  quantidade Int      // Quantidade perdida
+  motivo     String   // Quebra, Vencimento, Erro, etc.
+  observacao String?  // Observação adicional
+  data       DateTime @default(now()) // Data/hora da baixa (horário brasileiro)
+  usuarioId  Int      // Usuário que registrou a baixa
+  
+  produto Produto @relation(fields: [produtoId], references: [id])
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+}
+
+model Pagamento {
+  id        Int      @id @default(autoincrement())
+  hospedeId Int
+  valor     Float    // Valor do pagamento
+  metodo    String   // PIX, DINHEIRO, CARTAO, DEBITO
+  data      DateTime @default(now()) // Data/hora do pagamento (horário brasileiro)
+  
+  hospede Hospede @relation(fields: [hospedeId], references: [id])
+}
+
+model Caixa {
+  id                  Int      @id @default(autoincrement())
+  usuarioId           Int      // Usuário que abriu o caixa
+  dataAbertura        DateTime @default(now()) // Data/hora de abertura
+  dataFechamento      DateTime? // Data/hora de fechamento (null se ainda aberto)
+  saldoInicial        Float    // Saldo inicial em dinheiro
+  saldoFinalDinheiro  Float?   // Saldo final contado em dinheiro (preenchido no fechamento)
+  saldoFinalCartao    Float?   // Saldo final em cartão (preenchido no fechamento)
+  status              String   @default("ABERTO") // ABERTO, FECHADO
+  observacao          String?  // Observações do fechamento (ex: quebra de caixa)
+  
+  usuario     Usuario          @relation(fields: [usuarioId], references: [id])
+  lancamentos LancamentoCaixa[] // Lançamentos deste caixa
+}
+
+model LancamentoCaixa {
+  id         Int      @id @default(autoincrement())
+  caixaId    Int      // Caixa ao qual pertence este lançamento
+  tipo       String   // VENDA, SANGRIA, SUPRIMENTO
+  valor      Float    // Valor do lançamento (positivo para VENDA/SUPRIMENTO, negativo para SANGRIA)
+  observacao String?  // Observação adicional
+  data       DateTime @default(now()) // Data/hora do lançamento (horário brasileiro)
+  
+  caixa Caixa @relation(fields: [caixaId], references: [id])
+}
+
+model CategoriaFinanceira {
+  id   Int    @id @default(autoincrement())
+  nome String // Ex: "Energia", "Estoque", "Aluguel"
+  tipo String // DESPESA, RECEITA
+  
+  contasPagar   ContaPagar[]
+  contasReceber ContaReceber[]
+}
+
+model ContaPagar {
+  id             Int       @id @default(autoincrement())
+  descricao      String    // Descrição da conta (ex: "Conta de luz - Janeiro")
+  valor          Float     // Valor a pagar
+  dataVencimento DateTime  // Data de vencimento
+  dataPagamento  DateTime? // Data em que foi pago (null se ainda não pago)
+  status         String    @default("PENDENTE") // PENDENTE, PAGO, ATRASADO
+  categoriaId    Int       // Categoria da despesa
+  fornecedor     String?   // Nome do fornecedor (opcional)
+  metodoPagamento String?  // PIX, DINHEIRO, CARTAO, DEBITO (preenchido ao pagar)
+  observacao     String?   // Observações adicionais
+  
+  categoria CategoriaFinanceira @relation(fields: [categoriaId], references: [id])
+}
+
+model ContaReceber {
+  id               Int       @id @default(autoincrement())
+  descricao        String    // Descrição da conta (ex: "Pagamento hóspede João")
+  valor            Float     // Valor a receber
+  dataVencimento   DateTime  // Data de vencimento
+  dataRecebimento  DateTime? // Data em que foi recebido (null se ainda não recebido)
+  status           String    @default("PENDENTE") // PENDENTE, RECEBIDO, ATRASADO
+  origem           String    // HOSPEDE, CARTAO_CREDITO, OUTROS
+  categoriaId      Int       // Categoria da receita
+  observacao       String?   // Observações adicionais
+  
+  categoria CategoriaFinanceira @relation(fields: [categoriaId], references: [id])
+}
