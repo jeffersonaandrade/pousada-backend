@@ -74,6 +74,48 @@ async function main() {
     console.log(`ℹ️  Já existem ${categoriasExistentes} categorias no banco. Seed de categorias pulado.`);
   }
 
+  // Criar ou atualizar usuários de teste (um de cada cargo)
+  console.log('Criando/atualizando usuários de teste...');
+  
+  const usuariosTeste = [
+    { nome: 'Administrador', pin: '0000', cargo: 'ADMIN' as const },
+    { nome: 'João Garçom', pin: '1234', cargo: 'WAITER' as const },
+    { nome: 'Soares Gerente', pin: '5678', cargo: 'MANAGER' as const },
+    { nome: 'Maria Limpeza', pin: '9999', cargo: 'CLEANER' as const },
+  ];
+
+  for (const usuarioData of usuariosTeste) {
+    const usuarioExistente = await prisma.usuario.findUnique({
+      where: { pin: usuarioData.pin },
+    });
+
+    if (usuarioExistente) {
+      // Atualizar usuário existente
+      await prisma.usuario.update({
+        where: { id: usuarioExistente.id },
+        data: {
+          nome: usuarioData.nome,
+          cargo: usuarioData.cargo,
+          ativo: true,
+        },
+      });
+      console.log(`✅ Usuário atualizado: ${usuarioData.nome} (PIN: ${usuarioData.pin}, Cargo: ${usuarioData.cargo})`);
+    } else {
+      // Criar novo usuário
+      await prisma.usuario.create({
+        data: {
+          nome: usuarioData.nome,
+          pin: usuarioData.pin,
+          cargo: usuarioData.cargo,
+          ativo: true,
+        },
+      });
+      console.log(`✅ Usuário criado: ${usuarioData.nome} (PIN: ${usuarioData.pin}, Cargo: ${usuarioData.cargo})`);
+    }
+  }
+
+  console.log('✅ Todos os usuários de teste foram criados/atualizados!');
+
   console.log('Seed concluído!');
 }
 

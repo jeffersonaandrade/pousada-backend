@@ -8,13 +8,14 @@ generator client {
 }
 
 // SQLite não suporta enums nativamente, usando String com valores específicos
-// Os tipos TypeScript são mantidos através do Prisma Client gerado
+// Valores válidos: ADMIN, MANAGER, WAITER, CLEANER
+// Validação é feita no código TypeScript através do enum Role em src/types/enums.ts
 
 model Usuario {
   id       Int     @id @default(autoincrement())
   nome     String
   pin      String  @unique // PIN de 4 dígitos para garçom
-  cargo    String  @default("WAITER") // WAITER, MANAGER, ADMIN
+  cargo    String  @default("WAITER") // ADMIN, MANAGER, WAITER, CLEANER
   ativo    Boolean @default(true)
   pedidosAutorizados Pedido[] @relation("PedidosAutorizados") // Pedidos manuais autorizados por este gerente
   pedidosCriados Pedido[] @relation("PedidosCriados") // Pedidos criados por este garçom

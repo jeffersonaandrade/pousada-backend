@@ -332,9 +332,60 @@ export class HospedeService {
   }
 
   async desativarHospede(id: number) {
-    return await prisma.hospede.update({
+    console.log(`[Desativar] Iniciando desativação do hóspede ID: ${id}`);
+    
+    // 1. Buscar dados atuais do hóspede (para pegar o quartoId)
+    const hospedeAlvo = await prisma.hospede.findUnique({
       where: { id },
-      data: { ativo: false },
+      select: { id: true, quartoId: true, quarto: true, nome: true },
+    });
+
+    console.log(`[Desativar] CHECKOUT DEBUG:`, hospedeAlvo);
+
+    if (!hospedeAlvo) {
+      throw new NotFoundError('Hóspede');
+    }
+
+    // Executar em transação para garantir atomicidade
+    return await prisma.$transaction(async (tx) => {
+      // 2. Lógica de Liberação (ID ou Fallback String)
+      let idQuartoParaLiberar: number | null = hospedeAlvo?.quartoId || null;
+
+      if (!idQuartoParaLiberar && hospedeAlvo?.quarto) {
+        console.log(`[Desativar] ID não encontrado. Buscando Quarto por número: ${hospedeAlvo.quarto}`);
+        const quartoEncontrado = await tx.quarto.findUnique({
+          where: { numero: hospedeAlvo.quarto },
+        });
+        if (quartoEncontrado) {
+          idQuartoParaLiberar = quartoEncontrado.id;
+          console.log(`[Desativar] Encontrado Quarto ID ${quartoEncontrado.id} pelo número: ${hospedeAlvo.quarto}`);
+        } else {
+          console.log(`[Desativar] ⚠️ Nenhum quarto encontrado com o número: "${hospedeAlvo.quarto}"`);
+        }
+      }
+
+      // 3. Atualizar o Quarto
+      if (idQuartoParaLiberar) {
+        console.log(`[Desativar] Liberando quarto ID ${idQuartoParaLiberar} para LIMPEZA`);
+        try {
+          await tx.quarto.update({
+            where: { id: idQuartoParaLiberar },
+            data: { status: 'LIMPEZA' },
+          });
+          console.log(`[Desativar] ✅ Quarto ID ${idQuartoParaLiberar} atualizado para LIMPEZA com sucesso`);
+        } catch (error: any) {
+          console.error(`[Desativar] ❌ Erro ao atualizar quarto ID ${idQuartoParaLiberar}:`, error.message);
+          // Não falha a desativação se não conseguir atualizar o quarto, apenas loga o erro
+        }
+      } else {
+        console.log(`[Desativar] ⚠️ AVISO: Hóspede ${hospedeAlvo.nome} (ID: ${hospedeAlvo.id}) sem quarto vinculado. Status do quarto não será alterado.`);
+      }
+
+      // 4. Desativar o hóspede
+      return await tx.hospede.update({
+        where: { id },
+        data: { ativo: false },
+      });
     });
   }
 
@@ -363,8 +414,28 @@ export class HospedeService {
       usuarioId?: number; // ID do usuário que está realizando o checkout (para registro no caixa)
     }
   ) {
+    // ============================================
+    // BUSCAR HÓSPEDE ANTES DA TRANSAÇÃO (DADOS FRESCOS)
+    // ============================================
+    console.log(`[Checkout] Iniciando checkout do hóspede ID: ${id}`);
+    
+    const hospedeAlvo = await prisma.hospede.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        quartoId: true,
+        quarto: true,
+      },
+    });
+
+    console.log('CHECKOUT DEBUG:', hospedeAlvo);
+
+    if (!hospedeAlvo) {
+      throw new NotFoundError('Hóspede');
+    }
+
     return await prisma.$transaction(async (tx) => {
-      // Buscar hóspede com histórico de pagamentos
+      // Buscar hóspede completo com histórico de pagamentos dentro da transação
       const hospede = await tx.hospede.findUnique({
         where: { id },
         include: {
@@ -377,6 +448,10 @@ export class HospedeService {
       if (!hospede) {
         throw new NotFoundError('Hóspede');
       }
+
+      console.log(`[Checkout] Hóspede encontrado: ${hospede.nome} (ID: ${hospede.id})`);
+      console.log(`[Checkout] Quarto ID vinculado: ${hospedeAlvo.quartoId || 'null'}`);
+      console.log(`[Checkout] Quarto String vinculado: ${hospedeAlvo.quarto || 'null'}`);
 
       // Calcular valor do pagamento (usa dividaAtual se não fornecido)
       const valorPagamento = options.valorPagamento ?? hospede.dividaAtual;
@@ -427,12 +502,45 @@ export class HospedeService {
         );
       }
 
-      // Se o hóspede tiver quarto, liberar o quarto (mudar status para LIMPEZA)
-      if (hospede.quartoId) {
-        await tx.quarto.update({
-          where: { id: hospede.quartoId },
-          data: { status: 'LIMPEZA' },
-        });
+      // ============================================
+      // LÓGICA DE LIBERAÇÃO DE QUARTO (ANTES DE DESATIVAR HÓSPEDE)
+      // ============================================
+      // Usar dados do hospedeAlvo (buscado antes da transação)
+      const idQuarto = hospedeAlvo?.quartoId;
+      const numQuarto = hospedeAlvo?.quarto;
+
+      if (idQuarto) {
+        console.log(`[Checkout] Atualizando Quarto ID ${idQuarto} para LIMPEZA...`);
+        try {
+          await tx.quarto.update({
+            where: { id: idQuarto },
+            data: { status: 'LIMPEZA' },
+          });
+          console.log(`[Checkout] ✅ Quarto ID ${idQuarto} atualizado para LIMPEZA com sucesso`);
+        } catch (error: any) {
+          console.error(`[Checkout] ❌ Erro ao atualizar quarto ID ${idQuarto}:`, error.message);
+          // Não falha o checkout se não conseguir atualizar o quarto, apenas loga o erro
+        }
+      } else if (numQuarto) {
+        console.log(`[Checkout] ID não encontrado. Buscando Quarto por número: ${numQuarto}`);
+        try {
+          const q = await tx.quarto.findUnique({ where: { numero: numQuarto } });
+          if (q) {
+            console.log(`[Checkout] Encontrado Quarto ID ${q.id}. Atualizando para LIMPEZA...`);
+            await tx.quarto.update({
+              where: { id: q.id },
+              data: { status: 'LIMPEZA' },
+            });
+            console.log(`[Checkout] ✅ Quarto ID ${q.id} (número: ${numQuarto}) atualizado para LIMPEZA com sucesso`);
+          } else {
+            console.log(`[Checkout] ⚠️ Nenhum quarto encontrado com o número: "${numQuarto}"`);
+          }
+        } catch (error: any) {
+          console.error(`[Checkout] ❌ Erro ao buscar/atualizar quarto por número "${numQuarto}":`, error.message);
+        }
+      } else {
+        console.log(`[Checkout] ⚠️ ERRO CRÍTICO: Hóspede sem quarto vinculado. Status não será alterado.`);
+        console.log(`[Checkout] ⚠️ Hóspede ID: ${hospede.id}, Nome: ${hospede.nome}`);
       }
 
       // Realizar checkout: zerar dívida, desativar e liberar pulseira

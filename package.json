@@ -15,7 +15,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "seed:produtos": "tsx scripts/seed-produtos.ts",
     "criar:admin": "tsx scripts/criar-admin.ts",
-    "diagnostico:pedidos": "tsx scripts/diagnostico-pedidos.ts"
+    "diagnostico:pedidos": "tsx scripts/diagnostico-pedidos.ts",
+    "backup": "tsx scripts/backup.ts"
   },
   "keywords": [
     "rfid",
@@ -37,12 +38,14 @@
     "exceljs": "^4.4.0",
     "fastify": "^4.28.1",
     "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.2.1",
     "socket.io": "^4.8.1",
     "tslib": "^2.8.1",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/node-cron": "^3.0.11",
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.22",
     "pino-pretty": "^11.2.3",

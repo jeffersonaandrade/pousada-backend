@@ -12,6 +12,8 @@ O backend foi construído com as seguintes tecnologias modernas e robustas:
 - **SQLite** como banco de dados local (ideal para redes locais/intranet)
 - **Frontend React** (Vite) para painel administrativo customizado
 - **Socket.io** para comunicação em tempo real entre cozinha e salão
+- **node-cron** para agendamento automático de tarefas (backup)
+- **ExcelJS** para geração de relatórios em Excel
 
 ## Arquitetura do Sistema
 
@@ -23,13 +25,18 @@ O banco de dados é estruturado com as seguintes entidades principais:
 
 | Entidade | Descrição | Campos Principais |
 |----------|-----------|-------------------|
-| **Usuario** | Garçons e funcionários do sistema | `nome`, `pin` (4 dígitos), `cargo` (WAITER/MANAGER/ADMIN), `ativo` |
+| **Usuario** | Garçons e funcionários do sistema | `nome`, `pin` (4 dígitos), `cargo` (WAITER/MANAGER/ADMIN/CLEANER), `ativo` |
 | **Quarto** | Quartos da pousada | `numero` (único), `andar`, `categoria`, `status` (LIVRE/OCUPADO/LIMPEZA/MANUTENCAO) |
 | **Hospede** | Clientes da pousada ou day use | `tipo` (HOSPEDE/DAY_USE/VIP), `nome`, `documento`, `quartoId`, `uidPulseira` (único), `limiteGasto`, `dividaAtual`, `ativo`, `dataCheckout` |
 | **Produto** | Itens do cardápio | `nome`, `preco`, `estoque`, `foto`, `categoria`, `setor` (COZINHA/BAR_PISCINA/BOATE), `visivelCardapio` |
 | **Pedido** | Pedidos realizados | `hospedeId`, `produtoId`, `status` (PENDENTE/PREPARANDO/PRONTO/ENTREGUE/CANCELADO), `valor`, `data`, `metodoCriacao` (NFC/MANUAL), `dataInicioPreparo`, `dataPronto` |
 | **Pagamento** | Histórico de pagamentos | `hospedeId`, `valor`, `metodo` (PIX/DINHEIRO/CARTAO/DEBITO), `data` |
 | **PerdaEstoque** | Baixas técnicas de estoque | `produtoId`, `quantidade`, `motivo`, `usuarioId`, `data` |
+| **Caixa** | Controle de caixa físico | `usuarioId`, `dataAbertura`, `dataFechamento`, `saldoInicial`, `saldoFinalDinheiro`, `saldoFinalCartao`, `status` (ABERTO/FECHADO) |
+| **LancamentoCaixa** | Movimentações do caixa | `caixaId`, `tipo` (VENDA/SANGRIA/SUPRIMENTO), `valor`, `observacao`, `data` |
+| **CategoriaFinanceira** | Categorias de despesas/receitas | `nome`, `tipo` (DESPESA/RECEITA) |
+| **ContaPagar** | Contas a pagar | `descricao`, `valor`, `dataVencimento`, `dataPagamento`, `status` (PENDENTE/PAGO/ATRASADO), `categoriaId`, `fornecedor`, `metodoPagamento` |
+| **ContaReceber** | Contas a receber | `descricao`, `valor`, `dataVencimento`, `dataRecebimento`, `status` (PENDENTE/RECEBIDO/ATRASADO), `origem` (HOSPEDE/CARTAO_CREDITO/OUTROS), `categoriaId` |
 
 ### Regras de Negócio Implementadas
 
@@ -202,6 +209,7 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
 - **WAITER**: Garçom - pode criar pedidos, atualizar status
 - **MANAGER**: Gerente - pode autorizar pedidos manuais, cancelar pedidos
 - **ADMIN**: Administrador - acesso total ao sistema
+- **CLEANER**: Camareira / Governança - pode visualizar e alterar status de quartos (perfil restrito para equipe de limpeza)
 
 **3. Autenticação de Pedidos Manuais:**
 - Pedidos criados manualmente (sem NFC) requerem PIN de `MANAGER` ou `ADMIN`
@@ -224,6 +232,89 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
 - Validações no Service (regras de negócio)
 - Validações no Route (formato dos dados)
 - Validações no Banco (constraints e relacionamentos)
+
+#### 💵 **Módulo: Caixa (Controle de Dinheiro Físico)**
+
+**1. Abertura de Caixa:**
+- Um usuário só pode ter um caixa aberto por vez
+- Requer `saldoInicial` (fundo de troco)
+- Status inicial: `ABERTO`
+- Data/hora de abertura registrada
+
+**2. Movimentações:**
+- **Vendas em Dinheiro**: Registradas automaticamente quando pagamento em `DINHEIRO` é realizado no checkout
+- **Sangrias**: Retirada de dinheiro do caixa (valida saldo suficiente)
+- **Suprimentos**: Adição de dinheiro ao caixa (ex: troco adicional)
+
+**3. Fechamento de Caixa:**
+- Requer `saldoFinalDinheiro` (valor contado fisicamente)
+- Calcula automaticamente a **quebra de caixa** (diferença entre esperado e contado)
+- Saldo esperado = `saldoInicial + vendas - sangrias + suprimentos`
+- Quebra = `saldoFinalDinheiro - saldoEsperado`
+- Status muda para `FECHADO`
+- Data/hora de fechamento registrada
+
+**4. Integração com Pagamentos:**
+- Pagamentos em `DINHEIRO` no checkout criam automaticamente `LancamentoCaixa` do tipo `VENDA`
+- Pagamentos de contas a pagar em `DINHEIRO` criam automaticamente `LancamentoCaixa` do tipo `SANGRIA`
+
+#### 💰 **Módulo: Financeiro (Contas a Pagar/Receber)**
+
+**1. Categorias Financeiras:**
+- Categorias do tipo `DESPESA` para contas a pagar
+- Categorias do tipo `RECEITA` para contas a receber
+- Categorias padrão criadas no seed: Aluguel, Energia/Água, Internet, Fornecedores Bebida, Manutenção, Salários, Hospedagem, Day Use, Vendas
+- Não permite remover categoria com contas vinculadas
+
+**2. Contas a Pagar:**
+- Status automático baseado em data de vencimento:
+  - `PENDENTE`: Vencimento futuro
+  - `ATRASADO`: Vencimento passado
+  - `PAGO`: Conta paga (após dar baixa)
+- **Baixa de Conta (Pagar)**:
+  - Requer `metodoPagamento` (PIX, DINHEIRO, CARTAO, DEBITO)
+  - Se `metodoPagamento === 'DINHEIRO'` e houver `usuarioId`, registra sangria no caixa automaticamente
+  - Atualiza `dataPagamento` e `status = PAGO`
+- Não permite editar/remover contas já pagas
+
+**3. Contas a Receber:**
+- Status automático baseado em data de vencimento:
+  - `PENDENTE`: Vencimento futuro
+  - `ATRASADO`: Vencimento passado
+  - `RECEBIDO`: Conta recebida (após dar baixa)
+- **Baixa de Conta (Receber)**:
+  - Atualiza `dataRecebimento` e `status = RECEBIDO`
+- Não permite editar/remover contas já recebidas
+
+**4. Dashboard Financeiro:**
+- Retorna totais de contas a pagar/receber agrupados por:
+  - **Vencidas**: Contas com vencimento passado
+  - **Hoje**: Contas que vencem hoje
+  - **Futuras**: Contas com vencimento futuro
+- Útil para planejamento financeiro e DRE (Demonstrativo de Resultados)
+
+#### 🔄 **Módulo: Backup Automatizado**
+
+**1. Sistema de Backup:**
+- Backup automático a cada hora (na hora cheia) usando `node-cron`
+- Backup manual disponível via comando `npm run backup`
+- Cópia segura do banco SQLite para pasta do OneDrive
+
+**2. Configuração:**
+- **Pasta de Destino**: `C:/Users/[user]/OneDrive/Backups_CondeFlow` (padrão)
+- **Variável de Ambiente**: `BACKUP_DIR` para personalizar destino
+- **Retenção**: 7 dias (configurável via `BACKUP_RETENTION_DAYS`)
+- Nome do arquivo: `backup-YYYY-MM-DD-HH-mm.db`
+
+**3. Rotação Automática:**
+- Remove automaticamente backups com mais de 7 dias
+- Evita acúmulo de arquivos no OneDrive
+- Logs informativos sobre backups removidos
+
+**4. Integração:**
+- Inicia automaticamente quando o servidor sobe
+- Não requer configuração externa (Windows Task Scheduler)
+- Logs identificados com `[Cron]` para fácil identificação
 
 ## Instalação e Configuração
 
@@ -274,18 +365,26 @@ JWT_EXPIRES_IN=24h                                                    # Tempo de
 O sistema não usa mais variáveis de ambiente para login. A autenticação é feita através de **usuários cadastrados na tabela `Usuario`** com PIN de 4 dígitos.
 
 **Primeiro Acesso:**
-Após executar as migrations, crie o primeiro usuário administrador:
+Após executar as migrations, execute o seed para criar os usuários de teste:
+
+```bash
+npx tsx prisma/seed.ts
+```
+
+Isso criará os seguintes usuários de teste:
+- **Administrador** (PIN: 0000) - Cargo: ADMIN
+- **João Garçom** (PIN: 1234) - Cargo: WAITER
+- **Soares Gerente** (PIN: 5678) - Cargo: MANAGER
+- **Maria Limpeza** (PIN: 9999) - Cargo: CLEANER
+
+⚠️ **IMPORTANTE:** Altere os PINs após o primeiro login usando a tela de Equipe no painel administrativo.
+
+**Alternativa (Criar apenas Admin):**
+Se preferir criar apenas o administrador:
 
 ```bash
 npm run criar:admin
 ```
-
-Isso criará um usuário admin com as seguintes credenciais:
-- **Nome:** Administrador
-- **PIN:** 0000
-- **Cargo:** ADMIN
-
-⚠️ **IMPORTANTE:** Altere o PIN após o primeiro login usando a tela de Equipe no painel administrativo.
 
 **Login no Sistema:**
 1. Acesse `http://localhost:3000` (será redirecionado para `/login`)
@@ -512,6 +611,48 @@ curl -X POST http://localhost:3000/api/usuarios \
 - Arquivos são salvos em `/uploads/` e servidos em `/uploads/:filename`
 - Retorna URL relativa para uso no campo `foto` do produto
 
+### Caixa
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| `POST` | `/api/caixa/abrir` | Abrir caixa (requer autenticação) - recebe `saldoInicial` |
+| `POST` | `/api/caixa/fechar` | Fechar caixa (requer autenticação) - recebe `saldoFinalDinheiro`, `saldoFinalCartao` (opcional) |
+| `GET` | `/api/caixa/status` | Status do caixa aberto (autenticação opcional) - retorna resumo com saldo atual |
+| `POST` | `/api/caixa/sangria` | Registrar sangria (retirar dinheiro) - recebe `valor`, `observacao` (opcional) |
+| `POST` | `/api/caixa/suprimento` | Registrar suprimento (adicionar dinheiro) - recebe `valor`, `observacao` (opcional) |
+
+**Regras de Caixa:**
+- Um usuário só pode ter um caixa aberto por vez
+- Sangrias validam saldo suficiente antes de permitir
+- Fechamento calcula quebra de caixa automaticamente
+- Vendas em dinheiro são registradas automaticamente no caixa aberto
+
+### Financeiro
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| `GET` | `/api/financeiro/dashboard` | Dashboard financeiro (totais de contas a pagar/receber) |
+| `GET` | `/api/financeiro/categorias` | Listar categorias (query: `?tipo=DESPESA`) |
+| `POST` | `/api/financeiro/categorias` | Criar categoria |
+| `PATCH` | `/api/financeiro/categorias/:id` | Atualizar categoria |
+| `DELETE` | `/api/financeiro/categorias/:id` | Remover categoria (bloqueado se houver contas vinculadas) |
+| `GET` | `/api/financeiro/contas-pagar` | Listar contas a pagar (query: `?status=PENDENTE&categoriaId=1`) |
+| `POST` | `/api/financeiro/contas-pagar` | Criar conta a pagar |
+| `PATCH` | `/api/financeiro/contas-pagar/:id` | Atualizar conta a pagar |
+| `DELETE` | `/api/financeiro/contas-pagar/:id` | Remover conta a pagar (bloqueado se já paga) |
+| `POST` | `/api/financeiro/contas-pagar/:id/pagar` | Dar baixa (pagar conta) - recebe `metodoPagamento` |
+| `GET` | `/api/financeiro/contas-receber` | Listar contas a receber (query: `?status=PENDENTE&origem=HOSPEDE`) |
+| `POST` | `/api/financeiro/contas-receber` | Criar conta a receber |
+| `PATCH` | `/api/financeiro/contas-receber/:id` | Atualizar conta a receber |
+| `DELETE` | `/api/financeiro/contas-receber/:id` | Remover conta a receber (bloqueado se já recebida) |
+| `POST` | `/api/financeiro/contas-receber/:id/receber` | Dar baixa (receber conta) |
+
+**Regras Financeiras:**
+- Status de contas é calculado automaticamente baseado em data de vencimento
+- Pagamento de conta em dinheiro registra sangria no caixa automaticamente
+- Categorias não podem ser removidas se houver contas vinculadas
+- Contas pagas/recebidas não podem ser editadas ou removidas
+
 ## Socket.io - Eventos em Tempo Real
 
 O sistema utiliza Socket.io para comunicação em tempo real entre o salão e a cozinha. Os seguintes eventos são emitidos automaticamente:
@@ -544,6 +685,38 @@ socket.on('pedido_atualizado', (pedido) => {
 O sistema utiliza um frontend React (Vite) customizado que é servido estaticamente pelo backend.
 
 Após compilar o frontend (`npm run build` na pasta `web-admin`), os arquivos são automaticamente copiados para `backend/public` e servidos em `http://localhost:3000`.
+
+### Telas Disponíveis
+
+O painel administrativo inclui as seguintes telas:
+
+- **Dashboard**: Visão geral do sistema com estatísticas
+- **Recepção**: Gestão de check-in/check-out de hóspedes
+- **Quartos**: Gestão de quartos e status (LIVRE, OCUPADO, LIMPEZA, MANUTENCAO)
+- **Cardápio**: Gestão de produtos do cardápio
+- **Estoque**: Controle de estoque e baixas técnicas
+- **Caixa**: Controle de caixa físico (abertura, fechamento, sangrias, suprimentos)
+- **Financeiro**: Gestão de contas a pagar/receber e categorias financeiras
+- **Equipe**: Gestão de usuários (garçons, gerentes, administradores)
+- **Relatórios**: Exportação de relatórios em Excel
+- **Cozinha (KDS)**: Tela dedicada para exibição de pedidos na cozinha
+
+### Funcionalidades do Frontend
+
+**Tela de Caixa:**
+- Abertura de caixa com fundo de troco inicial
+- Dashboard em tempo real com saldo atual calculado
+- Registro de sangrias e suprimentos
+- Fechamento de caixa com cálculo automático de quebra
+- Resumo detalhado do fechamento
+
+**Tela de Financeiro:**
+- Abas: A Pagar | A Receber | Categorias
+- Cards de resumo: Vencidas, Vencem Hoje, A Vencer
+- Cadastro de despesas e receitas
+- Dar baixa em contas (pagar/receber)
+- Integração automática com caixa ao pagar em dinheiro
+- Dashboard financeiro com totais consolidados
 
 O painel permite gerenciar todas as entidades do sistema através de uma interface moderna e responsiva.
 
@@ -620,18 +793,35 @@ pousada-backend/
 │   ├── config/
 │   │   └── (removido - usando frontend React)
 │   ├── routes/
-│   │   ├── pedido.routes.ts   # Rotas de pedidos
-│   │   ├── hospede.routes.ts  # Rotas de hóspedes
-│   │   ├── produto.routes.ts  # Rotas de produtos
-│   │   └── usuario.routes.ts  # Rotas de usuários
+│   │   ├── pedido.routes.ts      # Rotas de pedidos
+│   │   ├── hospede.routes.ts      # Rotas de hóspedes
+│   │   ├── produto.routes.ts      # Rotas de produtos
+│   │   ├── usuario.routes.ts      # Rotas de usuários
+│   │   ├── quarto.routes.ts       # Rotas de quartos
+│   │   ├── estoque.routes.ts      # Rotas de estoque
+│   │   ├── relatorio.routes.ts    # Rotas de relatórios
+│   │   ├── upload.routes.ts       # Rotas de upload
+│   │   ├── caixa.routes.ts        # Rotas de caixa
+│   │   └── financeiro.routes.ts   # Rotas de financeiro
 │   ├── services/
-│   │   ├── pedido.service.ts  # Lógica de negócio de pedidos
-│   │   ├── hospede.service.ts # Lógica de negócio de hóspedes
-│   │   ├── produto.service.ts # Lógica de negócio de produtos
-│   │   └── usuario.service.ts # Lógica de negócio de usuários
+│   │   ├── pedido.service.ts     # Lógica de negócio de pedidos
+│   │   ├── hospede.service.ts    # Lógica de negócio de hóspedes
+│   │   ├── produto.service.ts    # Lógica de negócio de produtos
+│   │   ├── usuario.service.ts    # Lógica de negócio de usuários
+│   │   ├── quarto.service.ts     # Lógica de negócio de quartos
+│   │   ├── estoque.service.ts    # Lógica de negócio de estoque
+│   │   ├── relatorio.service.ts  # Lógica de relatórios
+│   │   ├── caixa.service.ts      # Lógica de controle de caixa
+│   │   ├── financeiro.service.ts # Lógica de contas a pagar/receber
+│   │   ├── backup.service.ts     # Lógica de backup do banco
+│   │   └── cron.service.ts        # Gerenciamento de agendamentos
 │   ├── types/
 │   │   └── fastify.d.ts       # Tipos TypeScript customizados
 │   └── server.ts              # Arquivo principal do servidor
+├── scripts/
+│   ├── backup.ts              # Script manual de backup
+│   ├── seed-produtos.ts       # Seed de produtos
+│   └── criar-admin.ts         # Script para criar admin
 ├── .env.example               # Exemplo de variáveis de ambiente
 ├── .gitignore
 ├── package.json
@@ -650,7 +840,55 @@ pousada-backend/
 | Prisma Migrate | `npm run prisma:migrate` | Cria e aplica migrations |
 | Prisma Push | `npm run prisma:push` | Sincroniza schema com banco |
 | Prisma Studio | `npm run prisma:studio` | Abre interface visual do banco |
+| Prisma Seed | `npm run prisma:seed` | Executa seed (quartos e categorias financeiras) |
+| Seed Produtos | `npm run seed:produtos` | Popula produtos iniciais |
+| Criar Admin | `npm run criar:admin` | Cria usuário administrador padrão |
+| Backup Manual | `npm run backup` | Executa backup manual do banco de dados |
 | Frontend Build | `cd ../web-admin && npm run build` | Compila e copia frontend para public |
+
+## Sistema de Backup Automatizado
+
+O sistema possui backup automatizado integrado que executa a cada hora automaticamente quando o servidor está rodando.
+
+### Funcionamento
+
+- **Agendamento**: Backup executado automaticamente a cada hora (na hora cheia) usando `node-cron`
+- **Destino**: Pasta do OneDrive (padrão: `C:/Users/[user]/OneDrive/Backups_CondeFlow`)
+- **Rotação**: Remove automaticamente backups com mais de 7 dias
+- **Logs**: Logs identificados com `[Cron]` no console do servidor
+
+### Configuração
+
+**Variáveis de Ambiente (opcional):**
+- `BACKUP_DIR`: Define pasta de destino personalizada
+- `BACKUP_RETENTION_DAYS`: Define dias de retenção (padrão: 7)
+
+**Exemplo de uso:**
+```bash
+# Definir pasta personalizada
+export BACKUP_DIR="D:/Backups/Pousada"
+
+# Definir retenção de 30 dias
+export BACKUP_RETENTION_DAYS=30
+```
+
+### Backup Manual
+
+Para executar backup manualmente:
+
+```bash
+npm run backup
+```
+
+### Logs de Backup
+
+Quando o backup automático é executado, você verá logs como:
+
+```
+⏰ [Cron] Executando backup agendado...
+✅ [Cron] Backup realizado: C:\Users\...\backup-2025-12-16-14-00.db
+🗑️  [Cron] Backups antigos removidos: 2
+```
 
 ## Próximos Passos
 
@@ -660,6 +898,8 @@ Após configurar o backend, você pode:
 2. **Acessar o painel web** em `http://localhost:3000` para gerenciar dados
 3. **Integrar com o app mobile** configurando a URL da API no arquivo de configuração
 4. **Monitorar logs** para acompanhar requisições e eventos em tempo real
+5. **Abrir caixa** na tela de Caixa para iniciar controle de dinheiro físico
+6. **Cadastrar contas a pagar** na tela de Financeiro para gestão financeira completa
 
 ## Suporte e Manutenção
 

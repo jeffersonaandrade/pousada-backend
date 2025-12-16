@@ -22,6 +22,7 @@ import { financeiroRoutes } from './routes/financeiro.routes.js';
 import { AppError, handlePrismaError } from './lib/errors.js';
 import { prisma } from './lib/prisma.js';
 import { setupOperationLogging } from './middleware/logging.js';
+import { CronService } from './services/cron.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -132,6 +133,10 @@ async function start() {
 
   // Logging de operações críticas
   setupOperationLogging(fastify);
+
+  // Iniciar sistema de agendamento (cron jobs)
+  const cronService = new CronService();
+  cronService.start();
 
   // Disponibilizar io para as rotas
   fastify.decorate('io', io);

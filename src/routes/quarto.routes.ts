@@ -150,7 +150,7 @@ export async function quartoRoutes(fastify: FastifyInstance) {
   fastify.patch('/:id/status', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { id } = request.params as { id: string };
-      const { status } = request.body as { status: string };
+      const { status, forcar } = request.body as { status: string; forcar?: boolean };
 
       if (!status) {
         return reply.status(400).send({
@@ -159,7 +159,7 @@ export async function quartoRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const quarto = await quartoService.atualizarStatus(parseInt(id), status);
+      const quarto = await quartoService.atualizarStatus(parseInt(id), status, forcar || false);
 
       return reply.send({
         success: true,

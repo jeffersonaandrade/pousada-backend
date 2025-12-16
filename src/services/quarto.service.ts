@@ -77,7 +77,7 @@ export class QuartoService {
    * - OCUPADO só pode ser mudado para LIMPEZA ou MANUTENCAO (via checkout)
    * - MANUTENCAO pode ser mudado para LIVRE
    */
-  async atualizarStatus(id: number, novoStatus: string) {
+  async atualizarStatus(id: number, novoStatus: string, forcar: boolean = false) {
     const statusValidos = ['LIVRE', 'OCUPADO', 'LIMPEZA', 'MANUTENCAO'];
     
     if (!statusValidos.includes(novoStatus)) {
@@ -97,13 +97,15 @@ export class QuartoService {
       throw new NotFoundError('Quarto');
     }
 
-    // Validações de transição de status
-    if (quarto.status === 'OCUPADO' && novoStatus === 'LIVRE') {
-      throw new BusinessError('Não é possível mudar um quarto OCUPADO diretamente para LIVRE. Primeiro mude para LIMPEZA.');
-    }
+    // Validações de transição de status (ignoradas se forcar = true)
+    if (!forcar) {
+      if (quarto.status === 'OCUPADO' && novoStatus === 'LIVRE') {
+        throw new BusinessError('Não é possível mudar um quarto OCUPADO diretamente para LIVRE. Primeiro mude para LIMPEZA.');
+      }
 
-    if (quarto.status === 'OCUPADO' && quarto.hospedes.length > 0) {
-      throw new BusinessError('Não é possível mudar o status de um quarto que ainda possui hóspede ativo. Realize o checkout primeiro.');
+      if (quarto.status === 'OCUPADO' && quarto.hospedes.length > 0) {
+        throw new BusinessError('Não é possível mudar o status de um quarto que ainda possui hóspede ativo. Realize o checkout primeiro.');
+      }
     }
 
     return await prisma.quarto.update({
