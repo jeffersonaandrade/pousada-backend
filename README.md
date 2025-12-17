@@ -27,16 +27,16 @@ O banco de dados é estruturado com as seguintes entidades principais:
 |----------|-----------|-------------------|
 | **Usuario** | Garçons e funcionários do sistema | `nome`, `pin` (4 dígitos), `cargo` (WAITER/MANAGER/ADMIN/CLEANER), `ativo` |
 | **Quarto** | Quartos da pousada | `numero` (único), `andar`, `categoria`, `status` (LIVRE/OCUPADO/LIMPEZA/MANUTENCAO) |
-| **Hospede** | Clientes da pousada ou day use | `tipo` (HOSPEDE/DAY_USE/VIP), `nome`, `documento`, `quartoId`, `uidPulseira` (único), `limiteGasto`, `dividaAtual`, `ativo`, `dataCheckout` |
-| **Produto** | Itens do cardápio | `nome`, `preco`, `estoque`, `foto`, `categoria`, `setor` (COZINHA/BAR_PISCINA/BOATE), `visivelCardapio` |
-| **Pedido** | Pedidos realizados | `hospedeId`, `produtoId`, `status` (PENDENTE/PREPARANDO/PRONTO/ENTREGUE/CANCELADO), `valor`, `data`, `metodoCriacao` (NFC/MANUAL), `dataInicioPreparo`, `dataPronto` |
+| **Hospede** | Clientes da pousada ou day use | `tipo` (HOSPEDE/DAY_USE/VIP), `nome`, `documento`, `telefone`, `email`, `quartoId`, `uidPulseira` (único), `limiteGasto`, `dividaAtual`, `ativo`, `origem` (BALCAO/SITE), `dataCheckout` |
+| **Produto** | Itens do cardápio | `nome`, `preco`, `estoque`, `foto`, `categoria`, `descricao`, `setor` (COZINHA/BAR_PISCINA/BOATE), `visivelCardapio` |
+| **Pedido** | Pedidos realizados | `hospedeId`, `produtoId`, `status` (PENDENTE/PREPARANDO/PRONTO/ENTREGUE/CANCELADO), `valor`, `data`, `metodoCriacao` (NFC/MANUAL), `dataInicioPreparo`, `dataPronto`, `usuarioId` (garçom que criou), `gerenteId` (gerente que autorizou pedido manual) |
 | **Pagamento** | Histórico de pagamentos | `hospedeId`, `valor`, `metodo` (PIX/DINHEIRO/CARTAO/DEBITO), `data` |
-| **PerdaEstoque** | Baixas técnicas de estoque | `produtoId`, `quantidade`, `motivo`, `usuarioId`, `data` |
-| **Caixa** | Controle de caixa físico | `usuarioId`, `dataAbertura`, `dataFechamento`, `saldoInicial`, `saldoFinalDinheiro`, `saldoFinalCartao`, `status` (ABERTO/FECHADO) |
+| **PerdaEstoque** | Baixas técnicas de estoque | `produtoId`, `quantidade`, `motivo`, `observacao`, `usuarioId`, `data` |
+| **Caixa** | Controle de caixa físico | `usuarioId`, `dataAbertura`, `dataFechamento`, `saldoInicial`, `saldoFinalDinheiro`, `saldoFinalCartao`, `status` (ABERTO/FECHADO), `observacao` |
 | **LancamentoCaixa** | Movimentações do caixa | `caixaId`, `tipo` (VENDA/SANGRIA/SUPRIMENTO), `valor`, `observacao`, `data` |
 | **CategoriaFinanceira** | Categorias de despesas/receitas | `nome`, `tipo` (DESPESA/RECEITA) |
-| **ContaPagar** | Contas a pagar | `descricao`, `valor`, `dataVencimento`, `dataPagamento`, `status` (PENDENTE/PAGO/ATRASADO), `categoriaId`, `fornecedor`, `metodoPagamento` |
-| **ContaReceber** | Contas a receber | `descricao`, `valor`, `dataVencimento`, `dataRecebimento`, `status` (PENDENTE/RECEBIDO/ATRASADO), `origem` (HOSPEDE/CARTAO_CREDITO/OUTROS), `categoriaId` |
+| **ContaPagar** | Contas a pagar | `descricao`, `valor`, `dataVencimento`, `dataPagamento`, `status` (PENDENTE/PAGO/ATRASADO), `categoriaId`, `fornecedor`, `metodoPagamento`, `observacao` |
+| **ContaReceber** | Contas a receber | `descricao`, `valor`, `dataVencimento`, `dataRecebimento`, `status` (PENDENTE/RECEBIDO/ATRASADO), `origem` (HOSPEDE/CARTAO_CREDITO/OUTROS), `categoriaId`, `observacao` |
 
 ### Regras de Negócio Implementadas
 
