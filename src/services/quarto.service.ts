@@ -116,35 +116,34 @@ export class QuartoService {
 
   /**
    * Valida se um quarto está disponível para check-in
-   * Retorna o quarto se estiver LIVRE, lança erro caso contrário
+   * Permite múltiplos hóspedes no mesmo quarto (OCUPADO é permitido)
+   * Bloqueia apenas quartos em MANUTENCAO ou LIMPEZA
    */
   async validarQuartoDisponivel(quartoId: number) {
     const quarto = await prisma.quarto.findUnique({
       where: { id: quartoId },
-      include: {
-        hospedes: {
-          where: { ativo: true },
-        },
-      },
     });
 
     if (!quarto) {
       throw new NotFoundError('Quarto');
     }
 
-    if (quarto.status !== 'LIVRE') {
+    // Bloquear apenas quartos em MANUTENCAO ou LIMPEZA
+    // Permitir LIVRE e OCUPADO (para permitir múltiplos hóspedes)
+    if (quarto.status === 'MANUTENCAO') {
       throw new BusinessError(
-        `Quarto ${quarto.numero} não está disponível. Status atual: ${quarto.status}. ` +
-        `Apenas quartos com status LIVRE podem ser ocupados.`
+        `Quarto ${quarto.numero} está em manutenção e não pode ser ocupado.`
       );
     }
 
-    if (quarto.hospedes.length > 0) {
+    if (quarto.status === 'LIMPEZA') {
       throw new BusinessError(
-        `Quarto ${quarto.numero} já possui um hóspede ativo. Realize o checkout primeiro.`
+        `Quarto ${quarto.numero} está aguardando limpeza e não pode ser ocupado. ` +
+        `Altere o status para LIVRE antes de fazer check-in.`
       );
     }
 
+    // Removida validação de hóspedes ativos - agora permitimos múltiplos hóspedes no mesmo quarto
     return quarto;
   }
 

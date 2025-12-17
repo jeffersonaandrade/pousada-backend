@@ -311,17 +311,24 @@ export async function hospedeRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const hospede = await hospedeService.realizarCheckout(parseInt(id), {
+      const resultado = await hospedeService.realizarCheckout(parseInt(id), {
         metodoPagamento: body.metodoPagamento,
         valorPagamento: body.valorPagamento,
         forcarCheckout: body.forcarCheckout ?? false,
         usuarioId: request.user?.id, // Passar ID do usuário autenticado (se houver)
       });
 
+      // Montar mensagem completa incluindo informação do quarto
+      const mensagemCompleta = `${resultado.mensagemQuarto} Pagamento registrado e pulseira liberada.`;
+
       return reply.send({
         success: true,
-        data: hospede,
-        message: 'Checkout realizado com sucesso. Pagamento registrado e pulseira liberada.',
+        data: resultado.hospede,
+        message: mensagemCompleta,
+        quarto: {
+          hospedesRestantes: resultado.hospedesRestantes,
+          status: resultado.hospedesRestantes > 0 ? 'OCUPADO' : 'LIMPEZA',
+        },
       });
     } catch (error: any) {
       if (error.message === 'Hóspede não encontrado' || error.message.includes('não encontrado')) {

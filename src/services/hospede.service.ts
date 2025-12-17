@@ -1,6 +1,6 @@
 import { TipoCliente } from '../types/enums.js';
 import { prisma } from '../lib/prisma.js';
-import { ValidationError, NotFoundError, BusinessError } from '../lib/errors.js';
+import { ValidationError, NotFoundError, BusinessError, AppError } from '../lib/errors.js';
 import { getDataHoraBrasil } from '../lib/dateUtils.js';
 import { QuartoService } from './quarto.service.js';
 import { CaixaService } from './caixa.service.js';
@@ -84,6 +84,7 @@ export class HospedeService {
     }
 
     // Resolver quartoId: se fornecido quartoId, usar; se fornecido quarto (string), buscar por número
+    // NOTA: Validação de pulseira foi movida para DENTRO das transações para evitar race conditions
     let quartoId: number | undefined = data.quartoId;
     let numeroQuarto: string | undefined = data.quarto;
 
@@ -110,6 +111,29 @@ export class HospedeService {
     // Se valorEntrada for fornecido, criar hóspede, pedido e pagamento (se aplicável) em transação
     if (valorEntrada !== undefined && !isNaN(valorEntrada) && valorEntrada > 0) {
       return await prisma.$transaction(async (tx) => {
+        // ============================================
+        // VALIDAÇÃO DE PULSEIRA DENTRO DA TRANSAÇÃO (evita race condition)
+        // ============================================
+        const hospedeComPulseira = await tx.hospede.findFirst({
+          where: {
+            uidPulseira: data.uidPulseira,
+            ativo: true, // Apenas hóspedes ativos
+          },
+          select: {
+            id: true,
+            nome: true,
+            tipo: true,
+          },
+        });
+
+        if (hospedeComPulseira) {
+          throw new AppError(
+            `Esta pulseira está em uso por outro hóspede ativo (${hospedeComPulseira.nome}). Realize o checkout dele primeiro.`,
+            409, // Conflict
+            'PULSEIRA_EM_USO'
+          );
+        }
+
         // Lógica OBRIGATÓRIA: Se pagou na entrada, começa com 0. Se não pagou, começa com o valor da entrada.
         // Forçar definição explícita para garantir que prevaleça sobre qualquer valor default
         const dividaInicial = data.pagoNaEntrada === true ? 0 : valorEntrada;
@@ -122,12 +146,22 @@ export class HospedeService {
           dividaInicial,
         });
 
-        // Se for HOSPEDE, ocupar o quarto (mudar status para OCUPADO)
+        // Se for HOSPEDE, ocupar o quarto (mudar status para OCUPADO apenas se estiver LIVRE)
         if (data.tipo === 'HOSPEDE' && quartoId) {
-          await tx.quarto.update({
+          const quartoAtual = await tx.quarto.findUnique({
             where: { id: quartoId },
-            data: { status: 'OCUPADO' },
+            select: { status: true },
           });
+          
+          // Se o quarto está LIVRE, mudar para OCUPADO
+          // Se já está OCUPADO, manter OCUPADO (permitindo múltiplos hóspedes)
+          if (quartoAtual && quartoAtual.status === 'LIVRE') {
+            await tx.quarto.update({
+              where: { id: quartoId },
+              data: { status: 'OCUPADO' },
+            });
+          }
+          // Se já está OCUPADO, não precisa fazer nada (mantém OCUPADO)
         }
 
         // Criar hóspede
@@ -215,12 +249,45 @@ export class HospedeService {
     // Se não houver valorEntrada, criar apenas o hóspede (dívida começa zerada)
     // Usar transação para garantir atomicidade (ocupar quarto + criar hóspede)
     return await prisma.$transaction(async (tx) => {
-      // Se for HOSPEDE, ocupar o quarto (mudar status para OCUPADO)
+      // ============================================
+      // VALIDAÇÃO DE PULSEIRA DENTRO DA TRANSAÇÃO (evita race condition)
+      // ============================================
+      const hospedeComPulseira = await tx.hospede.findFirst({
+        where: {
+          uidPulseira: data.uidPulseira,
+          ativo: true, // Apenas hóspedes ativos
+        },
+        select: {
+          id: true,
+          nome: true,
+          tipo: true,
+        },
+      });
+
+      if (hospedeComPulseira) {
+        throw new AppError(
+          `Esta pulseira está em uso por outro hóspede ativo (${hospedeComPulseira.nome}). Realize o checkout dele primeiro.`,
+          409, // Conflict
+          'PULSEIRA_EM_USO'
+        );
+      }
+
+      // Se for HOSPEDE, ocupar o quarto (mudar status para OCUPADO apenas se estiver LIVRE)
       if (data.tipo === 'HOSPEDE' && quartoId) {
-        await tx.quarto.update({
+        const quartoAtual = await tx.quarto.findUnique({
           where: { id: quartoId },
-          data: { status: 'OCUPADO' },
+          select: { status: true },
         });
+        
+        // Se o quarto está LIVRE, mudar para OCUPADO
+        // Se já está OCUPADO, manter OCUPADO (permitindo múltiplos hóspedes)
+        if (quartoAtual && quartoAtual.status === 'LIVRE') {
+          await tx.quarto.update({
+            where: { id: quartoId },
+            data: { status: 'OCUPADO' },
+          });
+        }
+        // Se já está OCUPADO, não precisa fazer nada (mantém OCUPADO)
       }
 
       // Criar hóspede
@@ -413,7 +480,11 @@ export class HospedeService {
       forcarCheckout?: boolean; // Se true, força checkout mesmo se pagamento não bater com dívida
       usuarioId?: number; // ID do usuário que está realizando o checkout (para registro no caixa)
     }
-  ) {
+  ): Promise<{
+    hospede: any;
+    mensagemQuarto: string;
+    hospedesRestantes: number;
+  }> {
     // ============================================
     // BUSCAR HÓSPEDE ANTES DA TRANSAÇÃO (DADOS FRESCOS)
     // ============================================
@@ -447,6 +518,11 @@ export class HospedeService {
 
       if (!hospede) {
         throw new NotFoundError('Hóspede');
+      }
+
+      // Validação: verificar se o hóspede está ativo (não foi desativado anteriormente)
+      if (!hospede.ativo) {
+        throw new BusinessError('Hóspede já foi desativado. Checkout já foi realizado anteriormente.');
       }
 
       console.log(`[Checkout] Hóspede encontrado: ${hospede.nome} (ID: ${hospede.id})`);
@@ -508,39 +584,87 @@ export class HospedeService {
       // Usar dados do hospedeAlvo (buscado antes da transação)
       const idQuarto = hospedeAlvo?.quartoId;
       const numQuarto = hospedeAlvo?.quarto;
+      let mensagemQuarto = '';
+      let hospedesRestantes = 0;
 
       if (idQuarto) {
-        console.log(`[Checkout] Atualizando Quarto ID ${idQuarto} para LIMPEZA...`);
-        try {
-          await tx.quarto.update({
-            where: { id: idQuarto },
-            data: { status: 'LIMPEZA' },
-          });
-          console.log(`[Checkout] ✅ Quarto ID ${idQuarto} atualizado para LIMPEZA com sucesso`);
-        } catch (error: any) {
-          console.error(`[Checkout] ❌ Erro ao atualizar quarto ID ${idQuarto}:`, error.message);
-          // Não falha o checkout se não conseguir atualizar o quarto, apenas loga o erro
+        // Verificar quantos hóspedes ainda estão ativos no mesmo quarto (excluindo o que está fazendo checkout)
+        const hospedesAtivosNoQuarto = await tx.hospede.count({
+          where: {
+            quartoId: idQuarto,
+            ativo: true,
+            id: { not: id }, // Excluir o hóspede que está fazendo checkout
+          },
+        });
+
+        hospedesRestantes = hospedesAtivosNoQuarto;
+        console.log(`[Checkout] Quarto ID ${idQuarto} possui ${hospedesRestantes} hóspede(s) ativo(s) restante(s)`);
+
+        if (hospedesRestantes > 0) {
+          // Ainda há hóspedes ativos no quarto - manter como OCUPADO
+          console.log(`[Checkout] Mantendo Quarto ID ${idQuarto} como OCUPADO (${hospedesRestantes} hóspede(s) ainda ativo(s))`);
+          mensagemQuarto = `Checkout realizado. Quarto permanece ocupado por ${hospedesRestantes} hóspede(s).`;
+        } else {
+          // Não há mais hóspedes ativos - liberar para limpeza
+          console.log(`[Checkout] Atualizando Quarto ID ${idQuarto} para LIMPEZA (último hóspede do quarto)...`);
+          try {
+            await tx.quarto.update({
+              where: { id: idQuarto },
+              data: { status: 'LIMPEZA' },
+            });
+            console.log(`[Checkout] ✅ Quarto ID ${idQuarto} atualizado para LIMPEZA com sucesso`);
+            mensagemQuarto = 'Checkout total realizado. Quarto liberado para limpeza.';
+          } catch (error: any) {
+            console.error(`[Checkout] ❌ Erro ao atualizar quarto ID ${idQuarto}:`, error.message);
+            // Não falha o checkout se não conseguir atualizar o quarto, apenas loga o erro
+            mensagemQuarto = 'Checkout realizado. Erro ao atualizar status do quarto.';
+          }
         }
       } else if (numQuarto) {
+        // Fallback: buscar quarto por número (compatibilidade com dados antigos)
         console.log(`[Checkout] ID não encontrado. Buscando Quarto por número: ${numQuarto}`);
         try {
           const q = await tx.quarto.findUnique({ where: { numero: numQuarto } });
           if (q) {
-            console.log(`[Checkout] Encontrado Quarto ID ${q.id}. Atualizando para LIMPEZA...`);
-            await tx.quarto.update({
-              where: { id: q.id },
-              data: { status: 'LIMPEZA' },
+            // Verificar quantos hóspedes ainda estão ativos no mesmo quarto
+            const hospedesAtivosNoQuarto = await tx.hospede.count({
+              where: {
+                quartoId: q.id,
+                ativo: true,
+                id: { not: id }, // Excluir o hóspede que está fazendo checkout
+              },
             });
-            console.log(`[Checkout] ✅ Quarto ID ${q.id} (número: ${numQuarto}) atualizado para LIMPEZA com sucesso`);
+
+            hospedesRestantes = hospedesAtivosNoQuarto;
+            console.log(`[Checkout] Quarto ID ${q.id} (número: ${numQuarto}) possui ${hospedesRestantes} hóspede(s) ativo(s) restante(s)`);
+
+            if (hospedesRestantes > 0) {
+              // Ainda há hóspedes ativos no quarto - manter como OCUPADO
+              console.log(`[Checkout] Mantendo Quarto ID ${q.id} como OCUPADO (${hospedesRestantes} hóspede(s) ainda ativo(s))`);
+              mensagemQuarto = `Checkout realizado. Quarto permanece ocupado por ${hospedesRestantes} hóspede(s).`;
+            } else {
+              // Não há mais hóspedes ativos - liberar para limpeza
+              console.log(`[Checkout] Encontrado Quarto ID ${q.id}. Atualizando para LIMPEZA...`);
+              await tx.quarto.update({
+                where: { id: q.id },
+                data: { status: 'LIMPEZA' },
+              });
+              console.log(`[Checkout] ✅ Quarto ID ${q.id} (número: ${numQuarto}) atualizado para LIMPEZA com sucesso`);
+              mensagemQuarto = 'Checkout total realizado. Quarto liberado para limpeza.';
+            }
           } else {
             console.log(`[Checkout] ⚠️ Nenhum quarto encontrado com o número: "${numQuarto}"`);
+            mensagemQuarto = 'Checkout realizado. Quarto não encontrado.';
           }
         } catch (error: any) {
           console.error(`[Checkout] ❌ Erro ao buscar/atualizar quarto por número "${numQuarto}":`, error.message);
+          mensagemQuarto = 'Checkout realizado. Erro ao atualizar status do quarto.';
         }
       } else {
-        console.log(`[Checkout] ⚠️ ERRO CRÍTICO: Hóspede sem quarto vinculado. Status não será alterado.`);
-        console.log(`[Checkout] ⚠️ Hóspede ID: ${hospede.id}, Nome: ${hospede.nome}`);
+        // Day Use ou hóspede sem quarto - não precisa atualizar status
+        console.log(`[Checkout] Hóspede sem quarto vinculado (Day Use ou similar). Status do quarto não será alterado.`);
+        console.log(`[Checkout] Hóspede ID: ${hospede.id}, Nome: ${hospede.nome}`);
+        mensagemQuarto = 'Checkout realizado com sucesso.';
       }
 
       // Realizar checkout: zerar dívida, desativar e liberar pulseira
@@ -560,7 +684,12 @@ export class HospedeService {
         },
       });
 
-      return hospedeAtualizado;
+      // Retornar objeto com hóspede e informações do quarto
+      return {
+        hospede: hospedeAtualizado,
+        mensagemQuarto: mensagemQuarto,
+        hospedesRestantes: hospedesRestantes,
+      };
     });
   }
 }

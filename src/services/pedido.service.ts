@@ -30,12 +30,15 @@ export class PedidoService {
       }
 
       if (!hospede.ativo) {
-        throw new BusinessError('Hóspede inativo');
+        throw new BusinessError('Hóspede inativo. Não é possível criar pedidos para hóspedes que já fizeram checkout.');
       }
 
-      const pedidosCriados = [];
+      // ============================================
+      // FASE 1: VALIDAR ESTOQUE E CALCULAR VALOR TOTAL
+      // ============================================
+      const itensValidados = [];
+      let valorTotalPedidos = 0;
 
-      // Processar cada item
       for (const item of items) {
         const quantidade = item.quantidade || 1;
 
@@ -64,35 +67,83 @@ export class PedidoService {
 
         // Calcular valor total do item
         const valorTotal = produto.preco * quantidade;
+        valorTotalPedidos += valorTotal;
 
-        // Validação de limite para Day Use: erro 403 se limite excedido
-        if (hospede.tipo === 'DAY_USE' && hospede.limiteGasto !== null) {
-          const novaDivida = hospede.dividaAtual + valorTotal;
-          if (novaDivida > hospede.limiteGasto) {
-            throw new ForbiddenError(
-              `Limite de crédito excedido. Limite: R$ ${hospede.limiteGasto.toFixed(2)}, ` +
-              `Dívida atual: R$ ${hospede.dividaAtual.toFixed(2)}, ` +
-              `Valor do pedido: R$ ${valorTotal.toFixed(2)}`
-            );
-          }
+        // Armazenar dados validados para processamento posterior
+        itensValidados.push({
+          produto,
+          quantidade,
+          valorTotal,
+        });
+      }
+
+      // ============================================
+      // FASE 2: VALIDAÇÃO DE LIMITE DAY USE (ANTES DE PROCESSAR)
+      // ============================================
+      if (hospede.tipo === 'DAY_USE' && hospede.limiteGasto !== null) {
+        const novaDivida = hospede.dividaAtual + valorTotalPedidos;
+        if (novaDivida > hospede.limiteGasto) {
+          throw new ForbiddenError(
+            `Limite de crédito excedido. Limite: R$ ${hospede.limiteGasto.toFixed(2)}, ` +
+            `Dívida atual: R$ ${hospede.dividaAtual.toFixed(2)}, ` +
+            `Valor do pedido: R$ ${valorTotalPedidos.toFixed(2)}`
+          );
         }
+      }
 
+      // ============================================
+      // FASE 3: INCREMENTAR DÍVIDA ATOMICAMENTE (ANTES DE CRIAR PEDIDOS)
+      // ============================================
+      // Incrementar dívida primeiro para evitar race condition
+      await tx.hospede.update({
+        where: { id: hospedeId },
+        data: { dividaAtual: { increment: valorTotalPedidos } },
+      });
+
+      // ============================================
+      // FASE 4: VALIDAR LIMITE APÓS INCREMENTO (PROTEÇÃO CONTRA RACE CONDITION)
+      // ============================================
+      if (hospede.tipo === 'DAY_USE' && hospede.limiteGasto !== null) {
+        // Buscar dívida atualizada após incremento
+        const hospedeAtualizado = await tx.hospede.findUnique({
+          where: { id: hospedeId },
+          select: { dividaAtual: true, limiteGasto: true },
+        });
+
+        if (hospedeAtualizado && hospedeAtualizado.limiteGasto !== null && hospedeAtualizado.dividaAtual > hospedeAtualizado.limiteGasto) {
+          // Reverter incremento se excedeu o limite
+          await tx.hospede.update({
+            where: { id: hospedeId },
+            data: { dividaAtual: { decrement: valorTotalPedidos } },
+          });
+          throw new ForbiddenError(
+            `Limite de crédito excedido após validação. Limite: R$ ${hospedeAtualizado.limiteGasto.toFixed(2)}, ` +
+            `Dívida atual: R$ ${hospedeAtualizado.dividaAtual.toFixed(2)}. ` +
+            `Outro pedido simultâneo pode ter sido processado.`
+          );
+        }
+      }
+
+      // ============================================
+      // FASE 5: PROCESSAR PEDIDOS (ESTOQUE E CRIAÇÃO)
+      // ============================================
+      const pedidosCriados = [];
+      const dataHoraBrasil = getDataHoraBrasil();
+
+      for (const itemValidado of itensValidados) {
         // Decrementar estoque
         await tx.produto.update({
-          where: { id: item.produtoId },
-          data: { estoque: { decrement: quantidade } },
+          where: { id: itemValidado.produto.id },
+          data: { estoque: { decrement: itemValidado.quantidade } },
         });
 
         // Criar pedido (um por item)
-        for (let i = 0; i < quantidade; i++) {
-          // Obter data/hora no timezone brasileiro para fins legais
-          const dataHoraBrasil = getDataHoraBrasil();
-          
+        for (let i = 0; i < itemValidado.quantidade; i++) {
           const pedido = await tx.pedido.create({
             data: {
               hospedeId,
-              produtoId: item.produtoId,
-              valor: produto.preco,
+              produtoId: itemValidado.produto.id,
+              valor: itemValidado.produto.preco,
               status: 'PENDENTE',
               metodoCriacao,
               gerenteId: metodoCriacao === 'MANUAL' ? gerenteId : null,
@@ -109,13 +160,6 @@ export class PedidoService {
           pedidosCriados.push(pedido);
         }
       }
-
-      // Atualizar dívida do hóspede (soma de todos os pedidos)
-      const totalDivida = pedidosCriados.reduce((sum, p) => sum + p.valor, 0);
-      await tx.hospede.update({
-        where: { id: hospedeId },
-        data: { dividaAtual: { increment: totalDivida } },
-      });
 
       return pedidosCriados;
     });
@@ -139,7 +183,7 @@ export class PedidoService {
       }
 
       if (!hospede.ativo) {
-        throw new BusinessError('Hóspede inativo');
+        throw new BusinessError('Hóspede inativo. Não é possível criar pedidos para hóspedes que já fizeram checkout.');
       }
 
       // Buscar produto

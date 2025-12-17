@@ -48,8 +48,20 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
 - **Day Use**: Documento é obrigatório para clientes do tipo `DAY_USE`
 - **Hóspede**: Quarto é obrigatório para clientes do tipo `HOSPEDE`
 - **Pagamento na Entrada**: Se `pagoNaEntrada = true`, o campo `metodoPagamento` é obrigatório
-- **Quarto Disponível**: O quarto deve estar com status `LIVRE` e sem hóspedes ativos para permitir check-in
-- **Ocupação Automática**: Ao realizar check-in, o quarto é automaticamente marcado como `OCUPADO`
+- **Validação de Pulseira NFC**:
+  - **Reutilização Controlada**: As pulseiras NFC são ativos reutilizáveis, mas não podem ser atribuídas a dois hóspedes ativos simultaneamente
+  - **Verificação Automática**: Antes de criar um novo hóspede, o sistema verifica se a pulseira informada (`uidPulseira`) já está em uso por um hóspede ativo
+  - **Comportamento**:
+    - Se a pulseira estiver em uso: Retorna erro 409 (Conflict) com mensagem: "Esta pulseira está em uso por outro hóspede ativo. Realize o checkout dele primeiro."
+    - Se a pulseira estiver livre: Permite o cadastro normalmente
+  - **Aplicação**: A mesma regra vale para `HOSPEDE` e `DAY_USE`
+  - **Objetivo**: Garantir a rotatividade das pulseiras com segurança, impedindo conflitos de consumo entre hóspedes
+- **Quarto Disponível**: 
+  - Permite check-in em quartos com status `LIVRE` ou `OCUPADO` (múltiplos hóspedes permitidos)
+  - Bloqueia check-in em quartos com status `MANUTENCAO` ou `LIMPEZA`
+- **Ocupação Automática**: 
+  - Se o quarto está `LIVRE`: Muda automaticamente para `OCUPADO` no primeiro check-in
+  - Se o quarto já está `OCUPADO`: Permanece `OCUPADO` (permite adicionar acompanhantes)
 
 **2. Criação Automática de Pedido de Diária:**
 - Se `valorEntrada` for fornecido, o sistema cria automaticamente um pedido de "Diária" ou "Day Use"
@@ -70,7 +82,37 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
   - Define `ativo = false`
   - Libera pulseira (`uidPulseira = null`) para reuso
   - Grava `dataCheckout` com horário brasileiro
-- **Status do Quarto**: Ao realizar checkout, o quarto é automaticamente marcado como `LIMPEZA`
+- **Checkout Condicional (Múltiplos Hóspedes)**:
+  - **Verificação de Hóspedes Restantes**: Antes de atualizar o status do quarto, o sistema verifica quantos hóspedes ainda estão ativos (`ativo = true`) no mesmo `quartoId`, excluindo o hóspede que está fazendo checkout
+  - **Lógica Condicional do Quarto**:
+    - Se `hospedesRestantes > 0`: Mantém o quarto como `OCUPADO` (não altera status)
+      - Mensagem: "Checkout realizado. Quarto permanece ocupado por X hóspede(s)."
+      - Objetivo: Impedir que a equipe de limpeza entre no quarto enquanto ainda houver acompanhantes ativos
+    - Se `hospedesRestantes === 0`: Atualiza o quarto para `LIMPEZA` (último hóspede do quarto)
+      - Mensagem: "Checkout total realizado. Quarto liberado para limpeza."
+      - Objetivo: Sinalizar que o quarto está livre e pronto para limpeza
+  - **Day Use**: Hóspedes sem quarto vinculado não alteram status de quarto (apenas desativam o hóspede)
+  - **Resposta da API**: Inclui informações sobre o quarto:
+    ```json
+    {
+      "quarto": {
+        "hospedesRestantes": 1,
+        "status": "OCUPADO"
+      }
+    }
+    ```
+  - **Exemplos Práticos**:
+    - **Caso 1 - Casal no Quarto 101**: 
+      - João (ID: 1) e Maria (ID: 2) estão no quarto 101
+      - João faz checkout → Quarto permanece `OCUPADO` (Maria ainda está ativa)
+      - Maria faz checkout → Quarto muda para `LIMPEZA` (último hóspede)
+    - **Caso 2 - Família no Quarto 201**:
+      - Pai (ID: 3), Mãe (ID: 4) e Filho (ID: 5) estão no quarto 201
+      - Pai faz checkout → Quarto permanece `OCUPADO` (2 hóspedes restantes)
+      - Mãe faz checkout → Quarto permanece `OCUPADO` (1 hóspede restante)
+      - Filho faz checkout → Quarto muda para `LIMPEZA` (último hóspede)
+    - **Caso 3 - Day Use**:
+      - Cliente Day Use (sem quarto) faz checkout → Apenas desativa o hóspede (não afeta quartos)
 
 #### 🛒 **Módulo: Pedidos**
 
@@ -150,14 +192,19 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
 
 **1. Status de Quartos:**
 - **LIVRE**: Disponível para check-in
-- **OCUPADO**: Hóspede ativo no quarto (mudado automaticamente no check-in)
-- **LIMPEZA**: Após checkout, aguardando limpeza (mudado automaticamente no check-out)
+- **OCUPADO**: Hóspede(s) ativo(s) no quarto (mudado automaticamente no check-in)
+- **LIMPEZA**: Após checkout do último hóspede, aguardando limpeza (mudado automaticamente apenas quando todos os hóspedes fizerem checkout)
 - **MANUTENCAO**: Quarto em manutenção (definido manualmente)
 
 **2. Validações de Check-in:**
-- Quarto deve estar `LIVRE` para permitir check-in
-- Quarto não pode ter hóspedes ativos vinculados
-- Ao confirmar check-in, status muda automaticamente para `OCUPADO`
+- **Múltiplos Hóspedes Permitidos**: O sistema permite que múltiplos hóspedes (acompanhantes) sejam vinculados ao mesmo quarto
+- **Status do Quarto**:
+  - Quartos `LIVRE` ou `OCUPADO` podem receber novos hóspedes
+  - Quartos em `MANUTENCAO` ou `LIMPEZA` são bloqueados para check-in
+- **Atualização de Status**:
+  - Se o quarto está `LIVRE`: Muda automaticamente para `OCUPADO` no primeiro check-in
+  - Se o quarto já está `OCUPADO`: Permanece `OCUPADO` (permite adicionar acompanhantes)
+- **Exemplo**: É possível cadastrar "João" no quarto 202 e, em seguida, cadastrar "Maria" também no quarto 202, sem erro
 
 **3. Transições de Status:**
 - **LIVRE** → Pode mudar para: `OCUPADO`, `LIMPEZA`, `MANUTENCAO`
@@ -166,7 +213,21 @@ O sistema implementa regras de negócio críticas que garantem a integridade ope
 - **MANUTENCAO** → Pode mudar para: `LIVRE` (após manutenção concluída)
 - **Bloqueio**: Não permite mudar status de quarto `OCUPADO` com hóspede ativo (exceto via checkout)
 
-**4. Exclusão de Quartos:**
+**4. Checkout Condicional (Múltiplos Hóspedes):**
+- **Proteção para Quartos Compartilhados**: O sistema suporta quartos com múltiplos hóspedes (casais/famílias)
+- **Lógica de Liberação**:
+  - Ao realizar checkout de um hóspede, o sistema verifica quantos hóspedes ainda estão ativos no mesmo quarto
+  - Se ainda houver hóspedes ativos: O quarto permanece `OCUPADO` (não muda para `LIMPEZA`)
+  - Se for o último hóspede: O quarto muda automaticamente para `LIMPEZA`
+- **Objetivo**: Impedir que a equipe de limpeza entre no quarto enquanto ainda houver acompanhantes ativos
+- **Mensagens Informativas**: A API retorna informações sobre o status do quarto e quantos hóspedes restam
+- **Day Use**: Hóspedes sem quarto vinculado não afetam o status do quarto
+- **Exemplos Práticos**:
+  - **Cenário 1**: Casal no Quarto 101 - João faz checkout primeiro → Quarto permanece `OCUPADO` → Maria faz checkout → Quarto muda para `LIMPEZA`
+  - **Cenário 2**: Família no Quarto 201 - Pai e Mãe fazem checkout → Quarto permanece `OCUPADO` → Filho faz checkout → Quarto muda para `LIMPEZA`
+  - **Cenário 3**: Hóspede único no Quarto 301 - Faz checkout → Quarto muda diretamente para `LIMPEZA`
+
+**5. Exclusão de Quartos:**
 - **Regras de Segurança**:
   - Status deve ser `LIVRE`
   - Não pode ter hóspedes ativos vinculados
